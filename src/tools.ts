@@ -8,6 +8,7 @@ export interface Tool {
 }
 
 const ACTIVE_STATUSES: Status[] = ['Applied', 'In Progress', 'Interview', 'On Hold', 'Screening Call']
+const ALL_STATUSES: Status[] = ['Applied', 'In Progress', 'Interview', 'Offer', 'On Hold', 'Rejected', 'Screening Call', 'Withdrawn']
 
 export const ApplicationTools: Tool[] = [{
     name: "get_application",
@@ -60,6 +61,30 @@ export const ApplicationTools: Tool[] = [{
             return { message: "No active applications" }
         }
         return applicationsActive
+    }
+
+},
+{
+    name: "update_status",
+    description: "Change the status of ONE application by ID (e.g. when the user says they got a screening call or were rejected). Status must be one of the allowed values. Returns an error if the ID does not exist or the status is invalid.",
+    parameters: {
+        type: "object",
+        properties: {
+            id: { type: "string", description: "id of the individual application eg: APP001" },
+            status: { type: "string", description: "The new updated status", enum: ALL_STATUSES }
+        },
+        required: ["id", "status"]
+    },
+    execute: (args) => {
+        if(!ALL_STATUSES.includes(String(args.status) as Status)){
+            return { error: `Invalid status "${args.status}". Valid statuses: ${ALL_STATUSES.join(", ")}` }
+        }
+        const applicationToUpdate = applications.find(u => u.id === String(args.id) )
+        if (!applicationToUpdate) {
+            return { error: `No application found under the id ${args.id}` }
+        }
+        applicationToUpdate.status = String(args.status) as Status
+        return { id: applicationToUpdate.id, company: applicationToUpdate.company, status: applicationToUpdate.status }
     }
 
 }
