@@ -3,7 +3,7 @@ import { JobTracker } from "./model";
 console.log('server is live')
 
 const {text, functionCalls} = await JobTracker('I just got an interview call for APP005')
-console.log(JSON.stringify(functionCalls, null, 2))
+console.log(JSON.stringify(functionCalls))
 
 // const updateTool = ApplicationTools.find(t => t.name === "update_status");
 // console.log(updateTool?.execute({ id: "APP002", status: "Interview" }));  // success
