@@ -1,9 +1,11 @@
+import { runAgent } from "./agent";
 import { JobTracker } from "./model";
 
 console.log('server is live')
 
-const {text, functionCalls} = await JobTracker('I just got an interview call for APP005')
-console.log(JSON.stringify(functionCalls))
+console.log(await runAgent("Hi"))
+
+
 
 // const updateTool = ApplicationTools.find(t => t.name === "update_status");
 // console.log(updateTool?.execute({ id: "APP002", status: "Interview" }));  // success
