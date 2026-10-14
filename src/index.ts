@@ -1,14 +1,15 @@
-import { runAgent } from "./agent";
-import { JobTracker } from "./model";
+import { createAgent } from "./agent"
+import { ask, rl } from "./io"
 
-console.log('server is live')
+const send = createAgent()
 
-console.log(await runAgent("Hi"))
+console.log("Job tracker agent. Type 'exit' to quit.")
 
+while (true) {
+    const input = (await ask("\nyou> ")).trim()
+    if (!input) continue
+    if (input === "exit") break
+    console.log("\nagent>", await send(input))
+}
 
-
-// const updateTool = ApplicationTools.find(t => t.name === "update_status");
-// console.log(updateTool?.execute({ id: "APP002", status: "Interview" }));  // success
-// console.log(updateTool?.execute({ id: "APP999", status: "Interview" }));  // unknown ID
-// console.log(updateTool?.execute({ id: "APP002", status: "Waiting" }));    // invalid status
-// console.log(ApplicationTools[0]?.execute({ id: "APP002" }));              // status should now be Interview
+rl.close()
