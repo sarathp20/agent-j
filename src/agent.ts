@@ -18,9 +18,10 @@ const functionDeclarations = ApplicationTools.map((tool) => ({
     parameters: tool.parameters,
 }))
 
-const confirm = async (question: string): Promise<boolean> => {
-    const answer = await ask(question)
-    return answer.trim().toLowerCase() === "y"
+async function confirm(message: string): Promise<{ approved: boolean; reply: string }> {
+    const answer = (await ask(`${message}\nApprove? (y/n, or type a correction) `)).trim()
+    const approved = ["y", "yes"].includes(answer.toLowerCase())
+    return { approved, reply: answer }
 }
 
 export const createAgent = () => {
@@ -64,17 +65,21 @@ export const createAgent = () => {
                     result = { error: `No tool named ${call.name ?? ""}` }
                 } else {
                     const args = call.args ?? {}
-                    let approved = true
+                    let declined: string | undefined
+
                     if (tool.requiresConfirmation) {
-                        const detail = tool.describe
-                            ? tool.describe(args)
-                            : JSON.stringify(args)
-                        approved = await confirm(
-                            `\n${tool.name}: ${detail}\nApprove? (y/n) `
-                        )
+                        const description = tool.describe?.(args) ?? JSON.stringify(args)
+                        const { approved, reply } = await confirm(`${tool.name}: ${description}`)
+                        if (!approved) {
+                            const isPlainNo = ["", "n", "no"].includes(reply.toLowerCase())
+                            declined = isPlainNo
+                                ? "User declined this action"
+                                : `User declined and said: "${reply}". Adjust and try again.`
+                        }
                     }
-                    if (!approved) {
-                        result = { error: "User declined this action" }
+
+                    if (declined) {
+                        result = { error: declined }
                     } else {
                         try {
                             result = await tool.execute(args)

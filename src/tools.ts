@@ -1,5 +1,10 @@
 import { applications } from "./data"
-import type { Application, Status } from "./types"
+import type { Application, Channel, Status, WorkMode } from "./types"
+
+import { CHANNELS, STATUSES, WORK_MODES } from "./types"
+
+
+export const ALL_STATUSES = STATUSES
 
 export interface Tool {
     name: string
@@ -10,14 +15,11 @@ export interface Tool {
     execute: (args: Record<string, unknown>) => unknown
 }
 
-const ALL_STATUSES: Status[] = [
-    "Applied", "In Progress", "Screening Call", "Interview",
-    "Offer", "Rejected", "Withdrawn", "On Hold",
-]
 
 const ACTIVE_STATUSES: Status[] = [
     "Applied", "In Progress", "Screening Call", "Interview", "On Hold",
 ]
+
 
 export const ApplicationTools: Tool[] = [
     {
@@ -146,10 +148,119 @@ export const ApplicationTools: Tool[] = [
                 id: u.id,
                 company: u.company,
                 role: u.role,
+                country: u.country,
+                city: u.city,
                 status: u.status,
                 appliedDate: u.appliedDate,
                 archived: u.archived,
             }))
+        },
+    },
+    {
+        name: "create_application",
+        description:
+            "Add a NEW job application the user has just applied for. Use only when the user says they applied somewhere new. Requires company, role and country. Everything else is optional: include it only if the user said it, never guess. Returns an error if the same company, role and country is already tracked.",
+        requiresConfirmation: true,
+        describe: (args) =>
+            `Add: ${args.company} · ${args.role} · ${args.city ? `${args.city}, ` : ""}${args.country}` +
+            ` (${args.workMode ?? "work mode unknown"}, ${args.channel ?? "channel unknown"})`,
+        parameters: {
+            type: "object",
+            properties: {
+                company: { type: "string", description: "Company applied to" },
+                role: { type: "string", description: "Job role applied for" },
+                country: {
+                    type: "string",
+                    description:
+                        "Country of the job. Infer from the city if it is unambiguous (e.g. Kochi -> India), otherwise ask the user.",
+                },
+                city: {
+                    type: "string",
+                    description: "City of the job. Only if the user said it, do not guess.",
+                },
+                workMode: {
+                    type: "string",
+                    description: "Work mode. Only if the user said it, do not guess.",
+                    enum: WORK_MODES,
+                },
+                channel: {
+                    type: "string",
+                    description:
+                        "Where the job was found or applied through. Only if the user said it, do not guess.",
+                    enum: CHANNELS,
+                },
+                recruiterName: { type: "string", description: "Recruiter's name (optional)" },
+                referralContact: { type: "string", description: "Referral contact's name (optional)" },
+                nextAction: { type: "string", description: "Next action to take (optional)" },
+                notes: { type: "string", description: "Any notes (optional)" },
+                appliedDate: {
+                    type: "string",
+                    description: "ISO date like 2026-10-17 (optional, defaults to today)",
+                },
+            },
+            required: ["company", "role", "country"],
+        },
+        execute: (args) => {
+            const company = String(args.company ?? "").trim()
+            const role = String(args.role ?? "").trim()
+            const country = String(args.country ?? "").trim()
+            if (!company || !role || !country) {
+                return { error: "company, role and country are required" }
+            }
+            if (args.workMode !== undefined && !WORK_MODES.includes(args.workMode as WorkMode)) {
+                return { error: `Invalid workMode "${args.workMode}". Valid: ${WORK_MODES.join(", ")}` }
+            }
+            if (args.channel !== undefined && !CHANNELS.includes(args.channel as Channel)) {
+                return { error: `Invalid channel "${args.channel}". Valid: ${CHANNELS.join(", ")}` }
+            }
+
+            let appliedDate = new Date().toLocaleDateString("en-CA")
+            if (args.appliedDate) {
+                const d = String(args.appliedDate)
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                    return { error: `appliedDate must look like 2026-10-17, got "${d}"` }
+                }
+                appliedDate = d
+            }
+
+            const same = (a: string, b: string) => a.trim().toLowerCase() === b.toLowerCase()
+            const duplicate = applications.find(
+                (u) =>
+                    !u.archived &&
+                    same(u.company, company) &&
+                    same(u.role, role) &&
+                    same(u.country, country),
+            )
+            if (duplicate) {
+                return { error: `Already tracked as ${duplicate.id} (status: ${duplicate.status})` }
+            }
+
+            const maxNum = applications.reduce((max, u) => {
+                const n = parseInt(u.id.match(/\d+/)?.[0] ?? "0", 10)
+                return n > max ? n : max
+            }, 0)
+
+            const app: Application = {
+                id: `APP${String(maxNum + 1).padStart(3, "0")}`,
+                company,
+                role,
+                country,
+                appliedDate,
+                status: "Applied",
+                recruiterContacted: false,
+                salaryShared: false,
+                archived: false,
+            }
+            if (args.city) app.city = String(args.city).trim()
+            if (args.workMode) app.workMode = args.workMode as WorkMode
+            if (args.channel) app.channel = args.channel as Channel
+            if (args.recruiterName) app.recruiterName = String(args.recruiterName)
+            if (args.referralContact) app.referralContact = String(args.referralContact)
+            if (args.nextAction) app.nextAction = String(args.nextAction)
+            if (args.notes) app.notes = String(args.notes)
+
+            applications.push(app)
+            return { id: app.id, company: app.company, role: app.role, status: app.status }
         },
     },
 ]
