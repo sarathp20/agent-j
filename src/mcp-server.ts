@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
-import { ALL_STATUSES, ApplicationTools } from "./tools";
+import { ApplicationTools } from "./tools";
 import { CHANNELS, STATUSES, WORK_MODES } from "./types"
 
 async function callTool(name: string, args: Record<string, unknown>) {

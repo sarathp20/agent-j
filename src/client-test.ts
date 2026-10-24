@@ -9,7 +9,10 @@ try {
             "|", tool.description?.slice(0, 60),
         )
     }
-console.log(JSON.stringify(mcp.tools[0]?.inputSchema, null, 2))
+console.log(await mcp.call("search_by_company", { company: "ibm" }))
+console.log(await mcp.call("get_application", { id: "APP999" }))
+console.log(await mcp.call("update_status", { id: "APP005", status: "Banana" }))
+console.log(await mcp.call("no_such_tool", {}))
 } finally {
     await mcp.close()
 }
