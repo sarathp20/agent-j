@@ -1,5 +1,5 @@
-import { applications } from "./data"
-import type { Application, Channel, Status, WorkMode } from "./types"
+import { pool } from "./db"
+import type { Channel, Status, WorkMode } from "./types"
 
 import { CHANNELS, STATUSES, WORK_MODES } from "./types"
 
@@ -11,7 +11,7 @@ export interface Tool {
     description: string
     parameters: Record<string, unknown>
     requiresConfirmation?: boolean
-    describe?: (args: Record<string, unknown>) => string
+    describe?: (args: Record<string, unknown>) => string | Promise<string>
     execute: (args: Record<string, unknown>) => unknown
 }
 
@@ -33,12 +33,9 @@ export const ApplicationTools: Tool[] = [
             },
             required: ["id"],
         },
-        execute: (args) => {
-            const found = applications.find((u) => u.id === String(args.id))
-            if (!found) {
-                return { error: `No application with id ${args.id}` }
-            }
-            return found
+        execute: async (args) => {
+            const result = await pool.query(`SELECT * FROM applications WHERE id = $1`, [String(args.id)])
+            return result.rows[0] ?? { error: `No application with id ${String(args.id)}` }
         },
     },
     {
@@ -55,26 +52,20 @@ export const ApplicationTools: Tool[] = [
             },
             required: [],
         },
-        execute: (args) => {
-            const matches = (u: Application) => {
-                const active = !u.archived && ACTIVE_STATUSES.includes(u.status)
-                if (!args.country) return active
-                return (
-                    active &&
-                    u.country.toLowerCase() === String(args.country).toLowerCase()
-                )
-            }
-            const result = applications.filter(matches).map((u) => ({
-                id: u.id,
-                company: u.company,
-                role: u.role,
-                status: u.status,
-                lastContactDate: u.lastContactDate,
-            }))
-            if (result.length === 0) {
+        execute: async (args) => {
+            const result = await pool.query(
+                `SELECT id, company, role, status, last_contact_date
+                    FROM applications
+                    WHERE archived = false
+                      AND status = ANY($1::text[])
+                      AND ($2::text IS NULL OR lower(country) = lower($2))
+                    ORDER BY id`,
+                [ACTIVE_STATUSES, args.country ?? null],
+            )
+            if (result.rows.length === 0) {
                 return { message: "No active applications" }
             }
-            return result
+            return result.rows
         },
     },
     {
@@ -82,12 +73,12 @@ export const ApplicationTools: Tool[] = [
         description:
             "Change the status of ONE application by ID (e.g. when the user says they got a screening call or were rejected). Status must be one of the allowed values. Returns an error if the ID does not exist or the status is invalid.",
         requiresConfirmation: true,
-        describe: (args) => {
-            const app = applications.find((u) => u.id === String(args.id))
-            if (!app) {
+        describe: async (args) => {
+            const app = await pool.query(`SELECT * FROM applications WHERE id = $1`, [String(args.id)])
+            if (app.rows.length === 0) {
                 return `${args.id} -> ${args.status} (no application with that ID)`
             }
-            return `${app.id} · ${app.company} · ${app.role}: ${app.status} -> ${args.status}`
+            return `${app.rows[0].id} · ${app.rows[0].company} · ${app.rows[0].role}: ${app.rows[0].status} -> ${args.status}`
         },
         parameters: {
             type: "object",
@@ -104,19 +95,22 @@ export const ApplicationTools: Tool[] = [
             },
             required: ["id", "status"],
         },
-        execute: (args) => {
+        execute: async (args) => {
             const newStatus = String(args.status)
             if (!ALL_STATUSES.includes(newStatus as Status)) {
                 return {
                     error: `Invalid status "${newStatus}". Valid statuses: ${ALL_STATUSES.join(", ")}`,
                 }
             }
-            const app = applications.find((u) => u.id === String(args.id))
-            if (!app) {
-                return { error: `No application found under the id ${args.id}` }
+
+            const result = await pool.query(
+                `UPDATE applications SET status = $2 WHERE id = $1 RETURNING id, company, status`,
+                [String(args.id), newStatus],
+            )
+            if (result.rows.length === 0) {
+                return { error: `No application found under the id ${String(args.id)}` }
             }
-            app.status = newStatus as Status
-            return { id: app.id, company: app.company, status: app.status }
+            return result.rows[0]
         },
     },
     {
@@ -133,33 +127,24 @@ export const ApplicationTools: Tool[] = [
             },
             required: ["company"],
         },
-        execute: (args) => {
+        execute: async (args) => {
             if (!args.company) {
                 return { error: "No company name provided" }
             }
-            const query = String(args.company).toLowerCase()
-            const matches = applications.filter((u) =>
-                u.company.toLowerCase().includes(query)
+            const result = await pool.query(
+                `SELECT id, company, role, status, city, country, applied_date, archived
+         FROM applications
+         WHERE company ILIKE $1
+         ORDER BY id`,
+                [`%${String(args.company)}%`],
             )
-            if (matches.length === 0) {
-                return { message: `No applications found for "${args.company}"` }
-            }
-            return matches.map((u) => ({
-                id: u.id,
-                company: u.company,
-                role: u.role,
-                country: u.country,
-                city: u.city,
-                status: u.status,
-                appliedDate: u.appliedDate,
-                archived: u.archived,
-            }))
+            return result.rows
         },
     },
     {
         name: "create_application",
         description:
-            "Add a NEW job application the user has just applied for. Use only when the user says they applied somewhere new. Requires company, role and country. Everything else is optional: include it only if the user said it, never guess. Returns an error if the same company, role and country is already tracked.",
+            "Add a NEW job application the user has just applied for. Use only when the user says they applied somewhere new. Requires company, role, city and country. Everything else is optional: include it only if the user said it, never guess. Returns an error if the same company, role, city and country is already tracked.",
         requiresConfirmation: true,
         describe: (args) =>
             `Add: ${args.company} · ${args.role} · ${args.city ? `${args.city}, ` : ""}${args.country}` +
@@ -167,16 +152,16 @@ export const ApplicationTools: Tool[] = [
         parameters: {
             type: "object",
             properties: {
-                company: { type: "string", description: "Company applied to" },
-                role: { type: "string", description: "Job role applied for" },
+                company: { type: "string", description: "Company applied to. The user must say it in their message. If they did not, ask them. Never take it from other applications." },
+                role: { type: "string", description: "Job role applied for. The user must say it in their message. If they did not, ask them. Never take it from other applications." },
                 country: {
                     type: "string",
                     description:
-                        "Country of the job. Infer from the city if it is unambiguous (e.g. Kochi -> India), otherwise ask the user.",
+                        "Country of the job. Infer from the city if it is unambiguous (e.g. Kochi -> India), otherwise ask the user. Never take it from other applications.",
                 },
                 city: {
                     type: "string",
-                    description: "City of the job. Only if the user said it, do not guess.",
+                    description: "City of the job. The user must say it in their message. If they did not, ask them. Never take it from other applications.",
                 },
                 workMode: {
                     type: "string",
@@ -198,14 +183,15 @@ export const ApplicationTools: Tool[] = [
                     description: "ISO date like 2026-10-17 (optional, defaults to today)",
                 },
             },
-            required: ["company", "role", "country"],
+            required: ["company", "role", "city", "country"],
         },
-        execute: (args) => {
+        execute: async (args) => {
             const company = String(args.company ?? "").trim()
             const role = String(args.role ?? "").trim()
             const country = String(args.country ?? "").trim()
-            if (!company || !role || !country) {
-                return { error: "company, role and country are required" }
+            const city = String(args.city ?? "").trim()
+            if (!company || !role || !city || !country) {
+                return { error: "company, role, city and country are required" }
             }
             if (args.workMode !== undefined && !WORK_MODES.includes(args.workMode as WorkMode)) {
                 return { error: `Invalid workMode "${args.workMode}". Valid: ${WORK_MODES.join(", ")}` }
@@ -215,52 +201,31 @@ export const ApplicationTools: Tool[] = [
             }
 
             let appliedDate = new Date().toLocaleDateString("en-CA")
-            if (args.appliedDate) {
-                const d = String(args.appliedDate)
-                if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-                    return { error: `appliedDate must look like 2026-10-17, got "${d}"` }
+            const optional = (v: unknown) => (v === undefined || v === "" ? null : String(v).trim())
+
+            try {
+                const result = await pool.query(
+                    `INSERT INTO applications
+           (id, company, role, country, city, applied_date, status,
+            work_mode, channel, recruiter_name, referral_contact, next_action, notes)
+         VALUES
+           ('APP' || lpad(nextval('app_id_seq')::text, 3, '0'),
+            $1, $2, $3, $4, $5, 'Applied', $6, $7, $8, $9, $10, $11)
+         RETURNING id, company, role, city, status`,
+                    [
+                        company, role, country, city, appliedDate,
+                        optional(args.workMode), optional(args.channel),
+                        optional(args.recruiterName), optional(args.referralContact),
+                        optional(args.nextAction), optional(args.notes),
+                    ],
+                )
+                return result.rows[0]
+            } catch (err) {
+                if ((err as { code?: string }).code === "23505") {
+                    return { error: `Already tracked: ${company} · ${role} · ${city}, ${country}` }
                 }
-                appliedDate = d
+                throw err
             }
-
-            const same = (a: string, b: string) => a.trim().toLowerCase() === b.toLowerCase()
-            const duplicate = applications.find(
-                (u) =>
-                    !u.archived &&
-                    same(u.company, company) &&
-                    same(u.role, role) &&
-                    same(u.country, country),
-            )
-            if (duplicate) {
-                return { error: `Already tracked as ${duplicate.id} (status: ${duplicate.status})` }
-            }
-
-            const maxNum = applications.reduce((max, u) => {
-                const n = parseInt(u.id.match(/\d+/)?.[0] ?? "0", 10)
-                return n > max ? n : max
-            }, 0)
-
-            const app: Application = {
-                id: `APP${String(maxNum + 1).padStart(3, "0")}`,
-                company,
-                role,
-                country,
-                appliedDate,
-                status: "Applied",
-                recruiterContacted: false,
-                salaryShared: false,
-                archived: false,
-            }
-            if (args.city) app.city = String(args.city).trim()
-            if (args.workMode) app.workMode = args.workMode as WorkMode
-            if (args.channel) app.channel = args.channel as Channel
-            if (args.recruiterName) app.recruiterName = String(args.recruiterName)
-            if (args.referralContact) app.referralContact = String(args.referralContact)
-            if (args.nextAction) app.nextAction = String(args.nextAction)
-            if (args.notes) app.notes = String(args.notes)
-
-            applications.push(app)
-            return { id: app.id, company: app.company, role: app.role, status: app.status }
-        },
-    },
+        }
+    }
 ]

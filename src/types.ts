@@ -17,7 +17,7 @@ export interface Application {
     company: string
     role: string
     country: string
-    city?: string
+    city: string
     appliedDate: string
     lastContactDate?: string
     status: Status

@@ -1,7 +1,6 @@
 import { GoogleGenAI, type Content, type Part } from "@google/genai"
 import { ask } from "./io"
 import { connectMcp, toGeminiDeclarations } from "./mcp-client"
-import { error } from "node:console"
 
 const apiKey = process.env.GEMINI_API_KEY
 if (!apiKey) {
@@ -27,14 +26,15 @@ export const createAgent = (mcp: Awaited<ReturnType<typeof connectMcp>>) => {
 - Only use data returned by tools. Never invent application IDs or details.
 - If a request could match more than one application, ask the user which one before changing anything.
 - After changing data, confirm exactly what changed.
-   - If a tool returns an error or no result, tell the user plainly. Never make up
-     applications, dates, times or any other data.
-   - If no tool can answer a question, say you can't do that.`
+- If a tool returns an error or no result, tell the user plainly. Never make up applications, dates, times or any other data.
+- Before calling create_application, every required field (company, role, city, country) must come from the user's own message. If one is missing, ask for it and do not call the tool. Never reuse details from other applications.
+- If no tool can answer a question, say you can't do that.`
 
     // History lives here, so it survives between messages.
     const contents: Content[] = []
     const toolsByName = new Map(mcp.tools.map(t => [t.name, t]))
     const functionDeclarations = toGeminiDeclarations(mcp.tools)
+
     return async (userMessage: string): Promise<string> => {
         contents.push({ role: "user", parts: [{ text: userMessage }] })
 
@@ -64,14 +64,17 @@ export const createAgent = (mcp: Awaited<ReturnType<typeof connectMcp>>) => {
                     let result: unknown
 
                     if (!tool) {
-                        result = { error: `No tool named ${call.name ?? ""}` }
+                        result = { error: `No tool named ${call.name}` }
                     } else {
                         const args = call.args ?? {}
                         let declined: string | undefined
 
+                        // Anything that is not explicitly read-only needs the user's approval.
                         if (tool.annotations?.readOnlyHint !== true) {
-                            const description = `${call.name} ${JSON.stringify(args)}`
-                            const { approved, reply } = await confirm(`${tool.name}: ${description}`)
+                            const argLines = Object.entries(args)
+                                .map(([key, value]) => `  ${key}: ${value}`)
+                                .join("\n")
+                            const { approved, reply } = await confirm(`${call.name}\n${argLines}`)
                             if (!approved) {
                                 const isPlainNo = ["", "n", "no"].includes(reply.toLowerCase())
                                 declined = isPlainNo
@@ -84,14 +87,13 @@ export const createAgent = (mcp: Awaited<ReturnType<typeof connectMcp>>) => {
                             result = { error: declined }
                         } else {
                             result = (await mcp.call(call.name, args)) ?? { error: "Tool returned no result" }
-
                         }
                     }
 
                     console.log(`  [step ${step}] ${call.name}`, call.args, "->", result)
                     parts.push({
                         functionResponse: {
-                            name: call.name ?? "",
+                            name: call.name,
                             id: call.id ?? "",
                             response: { result },
                         },
@@ -99,9 +101,9 @@ export const createAgent = (mcp: Awaited<ReturnType<typeof connectMcp>>) => {
                 } else {
                     parts.push({
                         functionResponse: {
-                            name: call.name ?? "",
+                            name: "",
                             id: call.id ?? "",
-                            response: { error: `Name of the tool passed is wrong, currently` },
+                            response: { error: "The tool call had no name" },
                         },
                     })
                 }

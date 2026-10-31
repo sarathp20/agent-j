@@ -95,10 +95,10 @@ function createServer() {
             description:
                 "Add a NEW job application the user has just applied for. Requires company, role and country. Everything else is optional: include it only if known, never guess. Returns an error if the same company, role and country is already tracked.",
             inputSchema: z.object({
-                company: z.string().min(1).describe("Company applied to"),
-                role: z.string().min(1).describe("Job role applied for"),
-                country: z.string().min(1).describe("Country of the job"),
-                city: z.string().optional().describe("City of the job"),
+                company: z.string().min(1).describe("Company applied to. The user must say it in their message. If they did not, ask them. Never take it from other applications."),
+                role: z.string().min(1).describe("Job role applied for. The user must say it in their message. If they did not, ask them. Never take it from other applications."),
+                country: z.string().min(1).describe("Country of the job.  Infer from the city if it is unambiguous (e.g. Kochi -> India), otherwise ask the user. Never take it from other applications."),
+                city: z.string().trim().min(1).describe("City of the job. Required. The user must say it in their message. If they did not, ask them. Never take it from other applications."),
                 workMode: z.enum(WORK_MODES).optional().describe("Work mode, only if known"),
                 channel: z.enum(CHANNELS).optional().describe("How the job was found, only if known"),
                 recruiterName: z.string().optional(),

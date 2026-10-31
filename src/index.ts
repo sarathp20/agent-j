@@ -13,5 +13,11 @@ try {
         if (input === "exit") break
         console.log("\nagent>", await send(input))
     }
+} catch (err) {
+    // Ctrl+C makes readline reject with ABORT_ERR. Treat it as a normal exit.
+    if ((err as NodeJS.ErrnoException).code !== "ABORT_ERR") throw err
+    console.log("\nBye.")
+} finally {
+    await mcp.close()
+    rl.close()
 }
-finally { await mcp.close(); rl.close() }
